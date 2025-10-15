@@ -5,8 +5,9 @@ on:
     branches:
       - main
   schedule:
-        # Runs everyday at 1:00 AM
-        - cron: "0 1 * * *"
+    # Runs everyday at 1:00 AM UTC
+    - cron: "0 1 * * *"
+  workflow_dispatch: # 允许手动触发
 
 permissions:
   contents: write
@@ -16,42 +17,79 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out the code
+      - name: Check out the repository
         uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "latest"
+          node-version: "20" # 使用一个稳定的 LTS 版本
 
       - name: Install dependencies
-        run: |
-          npm install -g javascript-obfuscator
+        # 不再使用全局安装，而是安装到本地 node_modules，这是更好的实践
+        run: npm install javascript-obfuscator
 
-      - name: Clone BPB workjs
+      - name: Clone BPB worker js
         run: |
-          wget -O origin.js https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/refs/heads/main/build/unobfuscated-worker.js
+          # 增加错误处理，如果下载失败则任务失败
+          wget -O origin.js https://raw.githubusercontent.com/bia-pain-bache/BPB-Worker-Panel/refs/heads/main/build/unobfuscated-worker.js || (echo "Failed to download the source file." && exit 1)
       
-      - name: Obfuscate BPB worker js
+      - name: Create Obfuscator Config
+        # 将复杂的配置写入一个 JSON 文件，方便管理
         run: |
-          javascript-obfuscator origin.js --output _worker.js \
+          echo '{
+            "compact": true,
+            "controlFlowFlattening": true,
+            "controlFlowFlatteningThreshold": 1,
+            "deadCodeInjection": true,
+            "deadCodeInjectionThreshold": 1,
+            "debugProtection": true,
+            "debugProtectionInterval": 4000,
+            "disableConsoleOutput": true,
+            "identifierNamesGenerator": "hexadecimal",
+            "log": false,
+            "numbersToExpressions": true,
+            "renameGlobals": false,
+            "selfDefending": true,
+            "simplify": true,
+            "splitStrings": true,
+            "splitStringsChunkLength": 10,
+            "stringArray": true,
+            "stringArrayCallsTransform": true,
+            "stringArrayEncoding": ["rc4"],
+            "stringArrayIndexShift": true,
+            "stringArrayRotate": true,
+            "stringArrayShuffle": true,
+            "stringArrayWrappersCount": 5,
+            "stringArrayWrappersChainedCalls": true,
+            "stringArrayWrappersParametersMaxCount": 5,
+            "stringArrayWrappersType": "function",
+            "stringArrayThreshold": 1,
+            "transformObjectKeys": true,
+            "unicodeEscapeSequence": false
+          }' > obfuscator.json
+
+      - name: Obfuscate BPB worker js (First Pass)
+        run: |
+          # 使用 npx 执行本地安装的包，并引用配置文件
+          npx javascript-obfuscator origin.js --config obfuscator.json --output pass1.js
+
+      - name: Obfuscate BPB worker js (Second Pass for added complexity)
+        # 第二轮混淆，使用不同的、更侧重于结构破坏的配置
+        run: |
+          npx javascript-obfuscator pass1.js \
+          --output _worker.js \
           --compact true \
-          --control-flow-flattening true \
-          --control-flow-flattening-threshold 1 \
-          --dead-code-injection true \
-          --dead-code-injection-threshold 1 \
-          --identifier-names-generator hexadecimal \
-          --rename-globals true \
+          --self-defending true \
           --string-array true \
-          --string-array-encoding 'rc4' \
-          --string-array-threshold 1 \
-          --transform-object-keys true \
-          --unicode-escape-sequence true
+          --string-array-encoding 'base64' \
+          --split-strings true \
+          --split-strings-chunk-length 5
 
       - name: Commit changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: main
-          commit_message: ':arrow_up: update latest bpb panel'
-          commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
-          push_options: '--set-upstream'
+          commit_message: ':zap: Chore: Update obfuscated worker script'
+          commit_author: 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
+
